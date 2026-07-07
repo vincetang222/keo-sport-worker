@@ -12,26 +12,29 @@
 //
 // VỀ QUOTA: mỗi giải trong FOOTBALL_LEAGUES = 1 lệnh gọi thật riêng (API-Sports không có kiểu
 // "gộp nhiều giải trong 1 lần gọi"). Cache được CHỈNH RIÊNG theo số lệnh gọi mỗi route để tổng số
-// lệnh gọi/ngày luôn nằm dưới 100 (quota free/ngày/API), có dư khoảng 30% phòng hờ:
-//   Football: 7 giải × 1 lệnh = 7 lệnh/lần làm mới. Cache 3 tiếng → tối đa 8 lần/ngày → ~56 lệnh/ngày.
+// lệnh gọi/ngày luôn nằm dưới 100 (quota free/ngày/API), có dư khoảng 30-40% phòng hờ:
+//   Football: 10 giải × 1 lệnh = 10 lệnh/lần làm mới. Cache 4 tiếng → tối đa 6 lần/ngày → 60 lệnh/ngày.
 //   Basketball: 3 ngày × 1 lệnh = 3 lệnh/lần làm mới. Cache 1 tiếng → tối đa 24 lần/ngày → ~72 lệnh/ngày.
 //   Volleyball: 1 lệnh/lần làm mới. Cache 30 phút → tối đa 48 lần/ngày → 48 lệnh/ngày.
 
-// Mã giải Football ĐÃ XÁC NHẬN (đối chiếu nhiều nguồn độc lập trùng khớp + World Cup đã test API
-// thật trực tiếp). Ưu tiên đúng các giải "Giải nổi bật" đã xác định liên quan người xem VN nhất.
+// Mã giải Football ĐÃ XÁC NHẬN — đối chiếu trực tiếp từ dashboard.api-football.com/soccer/ids
+// (ảnh chụp màn hình thật do người dùng cung cấp 07/2026), dùng đúng cột "ID (V3)" khớp với
+// endpoint v3.football.api-sports.io đang gọi trong code này (KHÔNG dùng cột "ID (V2)" — 2 hệ mã
+// khác nhau, dễ nhầm nếu không để ý). Season KHÔNG phải lúc nào cũng "2026" — vài giải không tổ
+// chức hàng năm nên mùa "Current: True" mới nhất có thể là năm khác, đã ghi rõ đúng theo ảnh.
 const FOOTBALL_LEAGUES = [
-  { id: 1,   name: 'FIFA World Cup',        season: 2026 },
-  { id: 2,   name: 'UEFA Champions League', season: 2026 },
-  { id: 3,   name: 'UEFA Europa League',    season: 2026 },
-  { id: 4,   name: 'UEFA Conference League',season: 2026 },
-  { id: 5,   name: 'UEFA Super Cup',        season: 2026 },
-  { id: 39,  name: 'English Premier League',season: 2026 },
-  { id: 140, name: 'Spanish La Liga',       season: 2026 },
-  // CẦN TRA CỨU THÊM (chỉ xem được trong dashboard.api-football.com/soccer/ids sau khi đăng nhập,
-  // không public, không đoán mù): UEFA Nations League, UEFA European Championship, AFC Asian Cup,
-  // CONCACAF Gold Cup, FIFA Club World Cup. Gửi mình ảnh chụp trang đó sau khi bạn đăng nhập, mình
-  // điền nốt vào danh sách này.
+  { id: 1,   name: 'FIFA World Cup',           season: 2026 },
+  { id: 2,   name: 'UEFA Champions League',    season: 2026 },
+  { id: 3,   name: 'UEFA Europa League',       season: 2026 },
+  { id: 4,   name: 'UEFA European Championship', season: 2024 }, // Euro 2024 là mùa gần nhất — Euro không tổ chức hàng năm, kế tiếp là 2028
+  { id: 5,   name: 'UEFA Nations League',      season: 2026 }, // mùa 2026 bắt đầu 24/9/2026 — trước đó (T7/2026 hiện tại) đang giữa 2 mùa, không có trận
+  { id: 15,  name: 'FIFA Club World Cup',      season: 2025 }, // thể thức mới 4 năm/lần — mùa 2025 (đã đấu xong T7/2025) là mùa gần nhất
+  { id: 22,  name: 'CONCACAF Gold Cup',        season: 2025 }, // 2 năm/lần — mùa 2025 (đã đấu xong T7/2025) là mùa gần nhất
+  { id: 39,  name: 'English Premier League',   season: 2026 },
+  { id: 140, name: 'Spanish La Liga',          season: 2026 },
+  { id: 532, name: 'AFC U23 Asian Cup',        season: 2025 }, // ĐANG DIỄN RA THẬT (06-24/1/2026) — xem ghi chú trong phản hồi về việc đây là bản U23, không phải đội tuyển chính
 ];
+
 
 // GHI CHÚ VOLLEYBALL: cần đúng mã giải liên quan VN (VD AVC Cup) — cũng phải tra sau khi có key
 // thật, gọi /leagues?search=... (không đoán mù theo đúng nguyên tắc dự án này).
@@ -55,7 +58,7 @@ export default {
     const { pathname } = new URL(request.url);
     let result, cacheSeconds;
     try {
-      if (pathname === '/football/top') { result = await getFootballTop(env); cacheSeconds = 10800; } // 3 tiếng
+      if (pathname === '/football/top') { result = await getFootballTop(env); cacheSeconds = 14400; } // 4 tiếng — 10 giải × 1 lệnh, cần cache dài hơn để an toàn quota
       else if (pathname === '/basketball/nba') { result = await getNBA(env); cacheSeconds = 3600; } // 1 tiếng
       else if (pathname === '/volleyball') { result = await getVolleyball(env); cacheSeconds = 1800; } // 30 phút
       else return new Response(JSON.stringify({ error: 'Route không tồn tại. Dùng /football/top, /basketball/nba, hoặc /volleyball' }), { status: 404, headers: corsHeaders });
