@@ -75,31 +75,46 @@ export default {
 
 // ─── FOOTBALL: gộp nhiều giải lớn (xem FOOTBALL_LEAGUES) — mỗi giải 1 lệnh gọi riêng, chạy song
 // song (Promise.all) để nhanh, rồi gộp lại thành 1 mảng trận đấu duy nhất, có gắn tên giải ──────
+// CÓ THÊM _debug: khi count=0 bất thường trên diện rộng (VD cả 10 giải cùng 0 trận), cần biết
+// CHÍNH XÁC từng giải trả về gì (mã lỗi HTTP, thông báo lỗi từ chính API-Sports) thay vì đoán mò —
+// _debug giữ lại thông tin này, không ảnh hưởng gì tới cách nhip-song.html dùng field `matches`.
 async function getFootballTop(env) {
   const perLeague = await Promise.all(FOOTBALL_LEAGUES.map(async lg => {
-    const r = await fetch(`https://v3.football.api-sports.io/fixtures?league=${lg.id}&season=${lg.season}`, {
-      headers: { 'x-apisports-key': env.API_FOOTBALL_KEY }
-    });
-    if (!r.ok) return []; // 1 giải lỗi không làm hỏng cả response — các giải khác vẫn trả về bình thường
-    const raw = await r.json();
-    return (raw.response || []).map(m => ({
-      id: m.fixture?.id,
-      time: m.fixture?.date,
-      status: m.fixture?.status?.short,
-      status_text: m.fixture?.status?.long,
-      round: m.league?.round,
-      competition: lg.name,
-      home: m.teams?.home?.name,
-      away: m.teams?.away?.name,
-      home_logo: m.teams?.home?.logo,
-      away_logo: m.teams?.away?.logo,
-      home_score: m.goals?.home,
-      away_score: m.goals?.away,
-      venue: m.fixture?.venue?.name,
-    }));
+    try {
+      const r = await fetch(`https://v3.football.api-sports.io/fixtures?league=${lg.id}&season=${lg.season}`, {
+        headers: { 'x-apisports-key': env.API_FOOTBALL_KEY }
+      });
+      const raw = await r.json(); // đọc cả khi HTTP lỗi để lấy thông tin debug từ body
+      const debugInfo = {
+        league: lg.name, id: lg.id, season: lg.season,
+        http_status: r.status,
+        api_results: raw?.results ?? null, // API-Sports luôn trả "results": số lượng bản ghi thật tìm được
+        api_errors: raw?.errors ?? null,   // API-Sports trả lỗi validation/quyền hạn ở đây dù HTTP vẫn 200
+      };
+      if (!r.ok) return { matches: [], debugInfo };
+      const matches = (raw.response || []).map(m => ({
+        id: m.fixture?.id,
+        time: m.fixture?.date,
+        status: m.fixture?.status?.short,
+        status_text: m.fixture?.status?.long,
+        round: m.league?.round,
+        competition: lg.name,
+        home: m.teams?.home?.name,
+        away: m.teams?.away?.name,
+        home_logo: m.teams?.home?.logo,
+        away_logo: m.teams?.away?.logo,
+        home_score: m.goals?.home,
+        away_score: m.goals?.away,
+        venue: m.fixture?.venue?.name,
+      }));
+      return { matches, debugInfo };
+    } catch (err) {
+      return { matches: [], debugInfo: { league: lg.name, id: lg.id, season: lg.season, fetch_error: err.message } };
+    }
   }));
-  const matches = perLeague.flat();
-  return { competitions: FOOTBALL_LEAGUES.map(l => l.name), updated: new Date().toISOString(), count: matches.length, matches };
+  const matches = perLeague.flatMap(r => r.matches);
+  const _debug = perLeague.map(r => r.debugInfo);
+  return { competitions: FOOTBALL_LEAGUES.map(l => l.name), updated: new Date().toISOString(), count: matches.length, matches, _debug };
 }
 
 // ─── BASKETBALL: NBA (lọc theo ngày — /games cần tham số date, đã xác nhận qua ví dụ chính thức) ──
