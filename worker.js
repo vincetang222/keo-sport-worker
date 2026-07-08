@@ -1,21 +1,43 @@
-// worker.js — "keo-sport-worker": Worker DUY NHẤT cho toàn bộ dữ liệu thể thao qua API-Sports.
+// worker.js — "keo-sport-worker": Worker DUY NHẤT cho toàn bộ dữ liệu thể thao + thời tiết qua
+// API-Sports (thể thao) và OpenWeatherMap (thời tiết, mục Du lịch trong nhip-song.html).
 //
-// KIẾN TRÚC (đã đổi theo yêu cầu): API MỚI (API-Sports) phủ CÀNG NHIỀU GIẢI LỚN CÀNG TỐT cho
-// Football/Basketball/Volleyball — không còn giới hạn 1 giải/môn như bản đầu. API CŨ (SportScore)
-// từ giờ CHỈ còn phục vụ Tennis (môn duy nhất API-Sports không có — đã xác nhận qua trang chủ
-// api-sports.io, danh sách môn của họ không có tennis).
+// KIẾN TRÚC: API MỚI (API-Sports) phủ CÀNG NHIỀU GIẢI LỚN CÀNG TỐT cho Football/Basketball/
+// Volleyball. API CŨ (SportScore) từ giờ CHỈ còn phục vụ Tennis. OpenWeatherMap phục vụ riêng
+// mục Du lịch — CHỌN ĐÚNG nguồn này vì ToS của họ ghi rõ bằng văn bản "Commercial use is allowed"
+// (giấy phép ODbL) — khác hẳn Open-Meteo (đã kiểm tra và loại vì ghi rõ "chỉ phi thương mại",
+// không hợp lệ cho keo.social là nền tảng thương mại).
 //
 // CÁC ROUTE:
-//   GET /football/top   → gộp nhiều giải lớn (xem FOOTBALL_LEAGUES bên dưới)
-//   GET /basketball/nba → NBA (hôm qua/hôm nay/ngày mai)
-//   GET /volleyball     → cần thêm 1 bước tra cứu — xem ghi chú
+//   GET /football/top     → gộp nhiều giải lớn (xem FOOTBALL_LEAGUES bên dưới)
+//   GET /basketball/nba   → NBA (hôm qua/hôm nay/ngày mai)
+//   GET /volleyball       → cần thêm 1 bước tra cứu — xem ghi chú
+//   GET /weather/vn-cities → thời tiết hiện tại 10 điểm đến du lịch phổ biến VN
 //
-// VỀ QUOTA: mỗi giải trong FOOTBALL_LEAGUES = 1 lệnh gọi thật riêng (API-Sports không có kiểu
-// "gộp nhiều giải trong 1 lần gọi"). Cache được CHỈNH RIÊNG theo số lệnh gọi mỗi route để tổng số
-// lệnh gọi/ngày luôn nằm dưới 100 (quota free/ngày/API), có dư khoảng 30-40% phòng hờ:
+// VỀ QUOTA THỂ THAO: mỗi giải trong FOOTBALL_LEAGUES = 1 lệnh gọi thật riêng (API-Sports không có
+// kiểu "gộp nhiều giải trong 1 lần gọi"). Cache được CHỈNH RIÊNG theo số lệnh gọi mỗi route để
+// tổng số lệnh gọi/ngày luôn nằm dưới 100 (quota free/ngày/API), có dư khoảng 30-40% phòng hờ:
 //   Football: 10 giải × 1 lệnh = 10 lệnh/lần làm mới. Cache 4 tiếng → tối đa 6 lần/ngày → 60 lệnh/ngày.
 //   Basketball: 3 ngày × 1 lệnh = 3 lệnh/lần làm mới. Cache 1 tiếng → tối đa 24 lần/ngày → ~72 lệnh/ngày.
 //   Volleyball: 1 lệnh/lần làm mới. Cache 30 phút → tối đa 48 lần/ngày → 48 lệnh/ngày.
+//
+// VỀ QUOTA THỜI TIẾT: OpenWeatherMap free = 1.000.000 lệnh/tháng, 60 lệnh/phút — RẤT dư dả so
+// với 10 thành phố × 1 lệnh/lần làm mới. Cache 20 phút → tối đa 72 lần/ngày × 10 = 720 lệnh/ngày
+// × 30 ngày ≈ 21.600 lệnh/tháng — chưa tới 3% hạn mức, còn dư rất nhiều nếu muốn thêm thành phố.
+
+// 10 điểm đến du lịch phổ biến VN — toạ độ để gọi OpenWeatherMap theo lat/lon (chính xác hơn gọi
+// theo tên thành phố, tránh nhầm giữa các địa danh trùng tên ở nước khác).
+const VN_CITIES = [
+  { name: 'Hà Nội',      lat: 21.0285, lon: 105.8542 },
+  { name: 'TP. Hồ Chí Minh', lat: 10.8231, lon: 106.6297 },
+  { name: 'Đà Nẵng',     lat: 16.0544, lon: 108.2022 },
+  { name: 'Hội An',      lat: 15.8801, lon: 108.3380 },
+  { name: 'Đà Lạt',      lat: 11.9404, lon: 108.4583 },
+  { name: 'Nha Trang',   lat: 12.2388, lon: 109.1967 },
+  { name: 'Phú Quốc',    lat: 10.2270, lon: 103.9631 },
+  { name: 'Sa Pa',       lat: 22.3380, lon: 103.8442 },
+  { name: 'Huế',         lat: 16.4637, lon: 107.5909 },
+  { name: 'Hạ Long',     lat: 20.9600, lon: 107.0450 },
+];
 
 // Mã giải Football ĐÃ XÁC NHẬN — đối chiếu trực tiếp từ dashboard.api-football.com/soccer/ids
 // (ảnh chụp màn hình thật do người dùng cung cấp 07/2026), dùng đúng cột "ID (V3)" khớp với
@@ -61,7 +83,8 @@ export default {
       if (pathname === '/football/top') { result = await getFootballTop(env); cacheSeconds = 14400; } // 4 tiếng — 10 giải × 1 lệnh, cần cache dài hơn để an toàn quota
       else if (pathname === '/basketball/nba') { result = await getNBA(env); cacheSeconds = 3600; } // 1 tiếng
       else if (pathname === '/volleyball') { result = await getVolleyball(env); cacheSeconds = 1800; } // 30 phút
-      else return new Response(JSON.stringify({ error: 'Route không tồn tại. Dùng /football/top, /basketball/nba, hoặc /volleyball' }), { status: 404, headers: corsHeaders });
+      else if (pathname === '/weather/vn-cities') { result = await getVNWeather(env); cacheSeconds = 1200; } // 20 phút
+      else return new Response(JSON.stringify({ error: 'Route không tồn tại. Dùng /football/top, /basketball/nba, /volleyball, hoặc /weather/vn-cities' }), { status: 404, headers: corsHeaders });
     } catch (err) {
       return new Response(JSON.stringify({ error: 'Worker lỗi: ' + err.message }), { status: 500, headers: corsHeaders });
     }
@@ -176,4 +199,34 @@ async function getVolleyball(env) {
     away_score: m.scores?.away,
   }));
   return { competition: 'Bóng chuyền', updated: new Date().toISOString(), count: matches.length, matches };
+}
+
+// ─── THỜI TIẾT: 10 điểm đến du lịch VN, gọi song song (Promise.all) rồi gộp lại 1 mảng ──
+// Dùng OpenWeatherMap "classic" Current Weather API (/data/2.5/weather) — KHÔNG dùng "One Call
+// 3.0" (endpoint /data/3.0/onecall) vì bản đó bắt nhập thẻ tín dụng ngay cả ở gói free, dễ vô
+// tình bị tính phí nếu vượt hạn mức. Bản classic dùng ở đây: free thật, không cần thẻ, có giấy
+// phép thương mại rõ ràng (ODbL).
+async function getVNWeather(env) {
+  const results = await Promise.all(VN_CITIES.map(async city => {
+    try {
+      const url = `https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&units=metric&lang=vi&appid=${env.OPENWEATHER_KEY}`;
+      const r = await fetch(url);
+      if (!r.ok) return { name: city.name, error: `HTTP ${r.status}` };
+      const raw = await r.json();
+      return {
+        name: city.name,
+        temp: raw.main?.temp!=null ? Math.round(raw.main.temp) : null,
+        feels_like: raw.main?.feels_like!=null ? Math.round(raw.main.feels_like) : null,
+        humidity: raw.main?.humidity,
+        wind_speed: raw.wind?.speed, // m/s
+        condition: raw.weather?.[0]?.description, // đã lang=vi nên trả tiếng Việt
+        icon: raw.weather?.[0]?.icon, // VD "10d" — ghép với https://openweathermap.org/img/wn/{icon}@2x.png ở phía client
+        sunrise: raw.sys?.sunrise, // unix timestamp UTC
+        sunset: raw.sys?.sunset,
+      };
+    } catch (err) {
+      return { name: city.name, error: err.message };
+    }
+  }));
+  return { updated: new Date().toISOString(), attribution: 'Weather data by OpenWeather (openweathermap.org)', cities: results };
 }
