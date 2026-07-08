@@ -227,7 +227,7 @@ async function getVNWeather(env) {
       // Gộp forecast 3 giờ/lần (40 điểm/5 ngày) thành 5 dòng theo NGÀY: nhiệt độ thấp/cao nhất
       // trong ngày + icon đại diện (lấy đúng bản ghi gần 13h trưa nhất — đại diện tốt nhất cho
       // "ban ngày" thay vì lấy bừa 1 mốc giờ nào đó).
-      let forecast = [];
+      let forecast = [], hourly = [];
       if (fcRes.ok) {
         const fc = await fcRes.json();
         const byDate = {};
@@ -249,6 +249,13 @@ async function getVNWeather(env) {
             condition: noon?.cond || null,
           };
         });
+        // 24 giờ tới = 8 điểm đầu tiên (8×3 giờ) của CHÍNH mảng forecast đã tải — không cần gọi
+        // thêm API nào khác, chỉ lấy bớt phần đầu của fc.list.
+        hourly = (fc.list||[]).slice(0,8).map(item=>({
+          time: item.dt_txt,
+          temp: item.main?.temp!=null ? Math.round(item.main.temp) : null,
+          icon: item.weather?.[0]?.icon || null,
+        }));
       }
 
       let aqi = null, aqi_label = null, aqi_color = null, pm25 = null;
@@ -268,6 +275,7 @@ async function getVNWeather(env) {
         condition: cur.weather?.[0]?.description, // đã lang=vi nên trả tiếng Việt
         icon: cur.weather?.[0]?.icon, // VD "10d" — ghép với https://openweathermap.org/img/wn/{icon}@2x.png ở phía client
         forecast, // 5 phần tử {date, temp_min, temp_max, icon, condition}
+        hourly, // 8 phần tử {time, temp, icon} — 24 giờ tới, cách nhau 3 giờ
         aqi, aqi_label, aqi_color, pm25, // chất lượng không khí — null nếu route air_pollution lỗi (không làm hỏng phần còn lại)
       };
     } catch (err) {
