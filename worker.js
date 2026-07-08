@@ -201,28 +201,74 @@ async function getVolleyball(env) {
   return { competition: 'Bóng chuyền', updated: new Date().toISOString(), count: matches.length, matches };
 }
 
-// ─── THỜI TIẾT: 10 điểm đến du lịch VN, gọi song song (Promise.all) rồi gộp lại 1 mảng ──
-// Dùng OpenWeatherMap "classic" Current Weather API (/data/2.5/weather) — KHÔNG dùng "One Call
-// 3.0" (endpoint /data/3.0/onecall) vì bản đó bắt nhập thẻ tín dụng ngay cả ở gói free, dễ vô
-// tình bị tính phí nếu vượt hạn mức. Bản classic dùng ở đây: free thật, không cần thẻ, có giấy
-// phép thương mại rõ ràng (ODbL).
+// ─── THỜI TIẾT: 10 điểm đến du lịch VN — GỘP 3 loại dữ liệu/thành phố (hiện tại + dự báo 5 ngày
+// + chất lượng không khí) vào 1 route duy nhất, hiện đủ trong 1 bảng thay vì tách nhiều tab. Mỗi
+// thành phố = 3 lệnh gọi song song (Promise.all lồng nhau) → 30 lệnh/lần làm mới toàn bộ route.
+// Cache 20 phút → tối đa 72 lần làm mới/ngày × 30 lệnh ≈ 2.160 lệnh/ngày ≈ 64.800/tháng — mới
+// 6.5% hạn mức 1 triệu/tháng, còn rất dư.
+// Dùng OpenWeatherMap "classic" (Current Weather + 5 Day Forecast + Air Pollution) — KHÔNG dùng
+// "One Call 3.0" vì bản đó bắt nhập thẻ tín dụng ngay cả gói free. Cả 3 endpoint dùng ở đây đều
+// free thật, không cần thẻ, giấy phép thương mại rõ ràng (ODbL).
+const AQI_LABELS = ['','Tốt','Khá','Trung bình','Kém','Rất kém']; // index 1-5 khớp đúng thang aqi của OpenWeather, index 0 bỏ trống cho dễ tra
+const AQI_COLORS = ['','var(--gn)','var(--gn)','var(--gold)','var(--a2)','var(--a2)'];
+
 async function getVNWeather(env) {
   const results = await Promise.all(VN_CITIES.map(async city => {
     try {
-      const url = `https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&units=metric&lang=vi&appid=${env.OPENWEATHER_KEY}`;
-      const r = await fetch(url);
-      if (!r.ok) return { name: city.name, error: `HTTP ${r.status}` };
-      const raw = await r.json();
+      const key = env.OPENWEATHER_KEY;
+      const [curRes, fcRes, aqRes] = await Promise.all([
+        fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&units=metric&lang=vi&appid=${key}`),
+        fetch(`https://api.openweathermap.org/data/2.5/forecast?lat=${city.lat}&lon=${city.lon}&units=metric&lang=vi&appid=${key}`),
+        fetch(`https://api.openweathermap.org/data/2.5/air_pollution?lat=${city.lat}&lon=${city.lon}&appid=${key}`),
+      ]);
+      if (!curRes.ok) return { name: city.name, error: `HTTP ${curRes.status}` };
+      const cur = await curRes.json();
+
+      // Gộp forecast 3 giờ/lần (40 điểm/5 ngày) thành 5 dòng theo NGÀY: nhiệt độ thấp/cao nhất
+      // trong ngày + icon đại diện (lấy đúng bản ghi gần 13h trưa nhất — đại diện tốt nhất cho
+      // "ban ngày" thay vì lấy bừa 1 mốc giờ nào đó).
+      let forecast = [];
+      if (fcRes.ok) {
+        const fc = await fcRes.json();
+        const byDate = {};
+        (fc.list||[]).forEach(item=>{
+          const [date, time] = (item.dt_txt||'').split(' ');
+          if(!date) return;
+          if(!byDate[date]) byDate[date]=[];
+          byDate[date].push({temp:item.main?.temp, icon:item.weather?.[0]?.icon, cond:item.weather?.[0]?.description, hour:parseInt((time||'12:00').slice(0,2))});
+        });
+        forecast = Object.keys(byDate).sort().slice(0,5).map(date=>{
+          const items = byDate[date];
+          const temps = items.map(i=>i.temp).filter(t=>t!=null);
+          const noon = items.reduce((best,i)=> Math.abs(i.hour-13) < Math.abs((best?.hour ?? 99)-13) ? i : best, null);
+          return {
+            date,
+            temp_min: temps.length? Math.round(Math.min(...temps)) : null,
+            temp_max: temps.length? Math.round(Math.max(...temps)) : null,
+            icon: noon?.icon || null,
+            condition: noon?.cond || null,
+          };
+        });
+      }
+
+      let aqi = null, aqi_label = null, aqi_color = null, pm25 = null;
+      if (aqRes.ok) {
+        const aq = await aqRes.json();
+        const a = aq.list?.[0]?.main?.aqi;
+        if(a!=null){ aqi=a; aqi_label=AQI_LABELS[a]||null; aqi_color=AQI_COLORS[a]||null; }
+        pm25 = aq.list?.[0]?.components?.pm2_5!=null ? Math.round(aq.list[0].components.pm2_5) : null;
+      }
+
       return {
         name: city.name,
-        temp: raw.main?.temp!=null ? Math.round(raw.main.temp) : null,
-        feels_like: raw.main?.feels_like!=null ? Math.round(raw.main.feels_like) : null,
-        humidity: raw.main?.humidity,
-        wind_speed: raw.wind?.speed, // m/s
-        condition: raw.weather?.[0]?.description, // đã lang=vi nên trả tiếng Việt
-        icon: raw.weather?.[0]?.icon, // VD "10d" — ghép với https://openweathermap.org/img/wn/{icon}@2x.png ở phía client
-        sunrise: raw.sys?.sunrise, // unix timestamp UTC
-        sunset: raw.sys?.sunset,
+        temp: cur.main?.temp!=null ? Math.round(cur.main.temp) : null,
+        feels_like: cur.main?.feels_like!=null ? Math.round(cur.main.feels_like) : null,
+        humidity: cur.main?.humidity,
+        wind_speed: cur.wind?.speed, // m/s
+        condition: cur.weather?.[0]?.description, // đã lang=vi nên trả tiếng Việt
+        icon: cur.weather?.[0]?.icon, // VD "10d" — ghép với https://openweathermap.org/img/wn/{icon}@2x.png ở phía client
+        forecast, // 5 phần tử {date, temp_min, temp_max, icon, condition}
+        aqi, aqi_label, aqi_color, pm25, // chất lượng không khí — null nếu route air_pollution lỗi (không làm hỏng phần còn lại)
       };
     } catch (err) {
       return { name: city.name, error: err.message };
