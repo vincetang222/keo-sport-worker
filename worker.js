@@ -11,7 +11,7 @@
 //   GET /football/top     → gộp nhiều giải lớn (xem FOOTBALL_LEAGUES bên dưới)
 //   GET /basketball/nba   → NBA (hôm qua/hôm nay/ngày mai)
 //   GET /volleyball       → cần thêm 1 bước tra cứu — xem ghi chú
-//   GET /weather/vn-cities → thời tiết hiện tại 10 điểm đến du lịch phổ biến VN
+//   GET /weather/vn-cities → thời tiết hiện tại 3 thành phố Kèo đang hoạt động (TP.HCM, HN, ĐN)
 //
 // VỀ QUOTA THỂ THAO: mỗi giải trong FOOTBALL_LEAGUES = 1 lệnh gọi thật riêng (API-Sports không có
 // kiểu "gộp nhiều giải trong 1 lần gọi"). Cache được CHỈNH RIÊNG theo số lệnh gọi mỗi route để
@@ -21,22 +21,17 @@
 //   Volleyball: 1 lệnh/lần làm mới. Cache 30 phút → tối đa 48 lần/ngày → 48 lệnh/ngày.
 //
 // VỀ QUOTA THỜI TIẾT: OpenWeatherMap free = 1.000.000 lệnh/tháng, 60 lệnh/phút — RẤT dư dả so
-// với 10 thành phố × 1 lệnh/lần làm mới. Cache 20 phút → tối đa 72 lần/ngày × 10 = 720 lệnh/ngày
-// × 30 ngày ≈ 21.600 lệnh/tháng — chưa tới 3% hạn mức, còn dư rất nhiều nếu muốn thêm thành phố.
+// với 3 thành phố × 3 endpoint/lần làm mới. Cache 20 phút → tối đa 72 lần/ngày × 9 = 648 lệnh/ngày
+// × 30 ngày ≈ 19.440 lệnh/tháng — chưa tới 2% hạn mức, còn dư rất nhiều nếu muốn thêm thành phố.
 
-// 10 điểm đến du lịch phổ biến VN — toạ độ để gọi OpenWeatherMap theo lat/lon (chính xác hơn gọi
-// theo tên thành phố, tránh nhầm giữa các địa danh trùng tên ở nước khác).
+// 3 THÀNH PHỐ KÈO đang hoạt động (khớp KEO_SERVICE_CITIES trong nhip-song.html) — chỉ gọi thời
+// tiết cho những thành phố THỰC SỰ có Chủ xị/Người đồng hành, tránh phí quota cho các điểm đến
+// du lịch chưa mở dịch vụ. Toạ độ để gọi OpenWeatherMap theo lat/lon (chính xác hơn gọi theo tên
+// thành phố, tránh nhầm giữa các địa danh trùng tên ở nước khác).
 const VN_CITIES = [
-  { name: 'Hà Nội',      lat: 21.0285, lon: 105.8542 },
   { name: 'TP. Hồ Chí Minh', lat: 10.8231, lon: 106.6297 },
+  { name: 'Hà Nội',      lat: 21.0285, lon: 105.8542 },
   { name: 'Đà Nẵng',     lat: 16.0544, lon: 108.2022 },
-  { name: 'Hội An',      lat: 15.8801, lon: 108.3380 },
-  { name: 'Đà Lạt',      lat: 11.9404, lon: 108.4583 },
-  { name: 'Nha Trang',   lat: 12.2388, lon: 109.1967 },
-  { name: 'Phú Quốc',    lat: 10.2270, lon: 103.9631 },
-  { name: 'Sa Pa',       lat: 22.3380, lon: 103.8442 },
-  { name: 'Huế',         lat: 16.4637, lon: 107.5909 },
-  { name: 'Hạ Long',     lat: 20.9600, lon: 107.0450 },
 ];
 
 // Mã giải Football ĐÃ XÁC NHẬN — đối chiếu trực tiếp từ dashboard.api-football.com/soccer/ids
@@ -201,11 +196,10 @@ async function getVolleyball(env) {
   return { competition: 'Bóng chuyền', updated: new Date().toISOString(), count: matches.length, matches };
 }
 
-// ─── THỜI TIẾT: 10 điểm đến du lịch VN — GỘP 3 loại dữ liệu/thành phố (hiện tại + dự báo 5 ngày
-// + chất lượng không khí) vào 1 route duy nhất, hiện đủ trong 1 bảng thay vì tách nhiều tab. Mỗi
-// thành phố = 3 lệnh gọi song song (Promise.all lồng nhau) → 30 lệnh/lần làm mới toàn bộ route.
-// Cache 20 phút → tối đa 72 lần làm mới/ngày × 30 lệnh ≈ 2.160 lệnh/ngày ≈ 64.800/tháng — mới
-// 6.5% hạn mức 1 triệu/tháng, còn rất dư.
+// ─── THỜI TIẾT: 3 thành phố Kèo — GỘP 3 loại dữ liệu/thành phố (hiện tại + dự báo 5 ngày + chất
+// lượng không khí) vào 1 route duy nhất, hiện đủ trong 1 bảng thay vì tách nhiều tab. Mỗi thành
+// phố = 3 lệnh gọi song song (Promise.all lồng nhau) → 9 lệnh/lần làm mới toàn bộ route. Cache 20
+// phút → tối đa 72 lần làm mới/ngày × 9 = 648 lệnh/ngày ≈ 19.440/tháng — mới ~2% hạn mức 1 triệu.
 // Dùng OpenWeatherMap "classic" (Current Weather + 5 Day Forecast + Air Pollution) — KHÔNG dùng
 // "One Call 3.0" vì bản đó bắt nhập thẻ tín dụng ngay cả gói free. Cả 3 endpoint dùng ở đây đều
 // free thật, không cần thẻ, giấy phép thương mại rõ ràng (ODbL).
